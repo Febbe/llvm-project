@@ -121,6 +121,13 @@ New checks
   Finds potentially erroneous calls to ``reset`` method on smart pointers when
   the pointee type also has a ``reset`` method.
 
+- New :doc:`performance-unnecessary-copy-on-last-use
+  <clang-tidy/checks/performance/unnecessary-copy-on-last-use>` check.
+
+  Finds variables of non-trivially-copyable types, that are used in a copy
+  construction on their last usage and suggest to wrap the usage in a
+  ``std::move``.
+
 New check aliases
 ^^^^^^^^^^^^^^^^^
 

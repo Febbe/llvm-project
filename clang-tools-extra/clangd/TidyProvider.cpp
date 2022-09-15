@@ -218,6 +218,8 @@ TidyProvider disableUnusableChecks(llvm::ArrayRef<std::string> ExtraBadChecks) {
       // code, which is often the case when clangd
       // tries to build an AST.
       "-bugprone-use-after-move",
+      // Using an CFG might crash on invalid code:
+      "-performance-unnecessary-copy-on-last-use",
       // Alias for bugprone-use-after-move.
       "-hicpp-invalid-access-moved",
       // Check uses dataflow analysis, which might hang/crash unexpectedly on
