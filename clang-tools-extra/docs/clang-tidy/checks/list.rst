@@ -318,6 +318,7 @@ Clang-Tidy Checks
    `performance-trivially-destructible <performance/trivially-destructible.html>`_, "Yes"
    `performance-type-promotion-in-math-fn <performance/type-promotion-in-math-fn.html>`_, "Yes"
    `performance-unnecessary-copy-initialization <performance/unnecessary-copy-initialization.html>`_, "Yes"
+   `performance-unnecessary-copy-on-last-use <performance/unnecessary-copy-on-last-use.html>`_, "Yes"
    `performance-unnecessary-value-param <performance/unnecessary-value-param.html>`_, "Yes"
    `portability-restrict-system-includes <portability/restrict-system-includes.html>`_, "Yes"
    `portability-simd-intrinsics <portability/simd-intrinsics.html>`_,
