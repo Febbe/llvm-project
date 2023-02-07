@@ -347,8 +347,7 @@ public:
     /// ``CheckOptions``. If the corresponding key is not present,
     /// return \p Default.
     ///
-    /// If the corresponding key can't be parsed as a ``T``, emit a
-    /// diagnostic and return \p Default.
+    /// If the corresponding key can't bstoreOptionst.
     ///
     /// \ref clang::tidy::OptionEnumMapping must be specialized for ``T`` to
     /// supply the mapping required to convert between ``T`` and a string.

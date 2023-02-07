@@ -1,4 +1,4 @@
-// RUN: %check_clang_tidy %s -std=c++17 performance-unnecessary-copy-on-last-use %t
+// RUN: %check_clang_tidy -check-suffix=CXX14 %s -std=c++17 performance-unnecessary-copy-on-last-use %t
 // RUN: %check_clang_tidy %s -std=c++11 performance-unnecessary-copy-on-last-use %t
 // CHECK-FIXES: #include <utility>
 
@@ -32,11 +32,11 @@ void valueTester() {
   Movable Mov{};
   valueReceiver(Mov);
   valueReceiver(Mov);
-  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
+  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
   // CHECK-FIXES: valueReceiver(std::move(Mov));
   Mov = Movable{};
   valueReceiver(Mov);
-  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
+  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
   // CHECK-FIXES: valueReceiver(std::move(Mov));
 }
 
@@ -50,7 +50,7 @@ void testUsageInBranch(bool Splitter) {
     Mov = Movable{};
   }
   valueReceiver(Mov);
-  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
+  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
   // CHECK-FIXES: valueReceiver(std::move(Mov));
 
   if(Splitter){
@@ -65,7 +65,7 @@ void testUsageInBranch(bool Splitter) {
 void testExplicitCopy() {
   Movable Mov{};
   constRefReceiver(Movable{Mov});
-  // CHECK-MESSAGES: [[@LINE-1]]:28: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
+  // CHECK-MESSAGES: [[@LINE-1]]:28: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
   // CHECK-FIXES: constRefReceiver(Movable{std::move(Mov)});
 }
 
@@ -74,20 +74,26 @@ Movable testReturn() {
   return Mov; // no warning, copy elision
 }
 
+Movable testReturn2(Movable Mov, bool F) {
+  return F? Mov: Movable{}; 
+  // CHECK-MESSAGES: [[@LINE-1]]:13: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use] 
+  // CHECK-FIXES: return F? std::move(Mov): Movable{};
+}
+
 Movable testReturn2(Movable && Mov, bool F) {
   return F? Mov: Movable{}; 
-  // CHECK-MESSAGES: [[@LINE-1]]:13: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use] 
+  // CHECK-MESSAGES: [[@LINE-1]]:13: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use] 
   // CHECK-FIXES: return F? std::move(Mov): Movable{};
 }
 
 void rValReferenceTester(Movable&& Mov) {
   valueReceiver(Mov);
   valueReceiver(Mov);
-  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
+  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
   // CHECK-FIXES: valueReceiver(std::move(Mov));
   Mov = Movable{};
   valueReceiver(Mov);
-  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
+  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
   // CHECK-FIXES: valueReceiver(std::move(Mov));
 }
 
@@ -105,13 +111,13 @@ void pointerTester(Movable* Mov) {
   valueReceiver(*Mov);
 }
 
-// Replacements in expansions from macros or of their parameters are buggy, so we don't fix them.
-// Todo (future): The source location of macro parameters might be fixed in the future
+// Replacements in expansions from macros or of their values are buggy, so we don't fix them.
+// Todo (future): The source location of macro values might be fixed in the future
 #define FUN(Mov) valueReceiver((Mov))
 void falseMacroExpansion() {
   Movable Mov;
   FUN(Mov);
-  // CHECK-MESSAGES: [[@LINE-1]]:7: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use] 
+  // CHECK-MESSAGES: [[@LINE-1]]:7: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use] 
   // CHECK-FIXES: FUN(Mov);
 }
 
@@ -137,10 +143,10 @@ template <class Movable>
 void initSomething(Movable&& Mov) {
   valueReceiver(Mov);
   valueReceiver(Mov);
-  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Parameter 'Mov' may be copied on last use, consider forwarding it instead. [performance-unnecessary-copy-on-last-use] 
+  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Value 'Mov' may be copied on last use, consider forwarding it instead. [performance-unnecessary-copy-on-last-use] 
   Mov = RemoveRefT<Movable>{};
   valueReceiver(Mov);
-  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Parameter 'Mov' may be copied on last use, consider forwarding it instead. [performance-unnecessary-copy-on-last-use]
+  // CHECK-MESSAGES: [[@LINE-1]]:17: warning: Value 'Mov' may be copied on last use, consider forwarding it instead. [performance-unnecessary-copy-on-last-use]
 }
 
 void initSomethingVal(Movable const& Mov) {
@@ -201,9 +207,8 @@ void lambdaCaptureRefTester() {
 void lambdaCaptureValueTester() {
   Movable Mov{};
   auto Lambda = [Mov]() mutable {
-    // CHECK-MESSAGES: [[@LINE-1]]:18: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
-    // CHECK-FIXES: auto Lambda = [Mov]() mutable {
-    // Note: No fix, because a fix requires c++14.
+    // CHECK-MESSAGES: [[@LINE-1]]:18: warning: Lambda captures 'Mov' are copied on last use, consider moving them instead. [performance-unnecessary-copy-on-last-use]
+    // CHECK-FIXES-CXX14: auto Lambda = [Mov = std::move(Mov)]() mutable {
     Mov.memberUse();
     };
   Lambda();
@@ -215,9 +220,8 @@ void lambdaCaptureValueTester() {
 void lambdaCaptureValueTester2() {
   Movable Mov{};
   auto Lambda = [Mov = Mov]() mutable {
-    // CHECK-MESSAGES: [[@LINE-1]]:24: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
-    // NOCHECK-FIXES: auto Lambda = [Mov = std::move(Mov)]() mutable {
-    // Note: No fix, because a fix requires c++14.
+    // CHECK-MESSAGES: [[@LINE-1]]:24: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
+    // CHECK-FIXES-CXX14: auto Lambda = [Mov = std::move(Mov)]() mutable {
     Mov.memberUse();
   };
   Lambda();
@@ -226,10 +230,8 @@ void lambdaCaptureValueTester2() {
 void lambdaCaptureValueTester3() {
   Movable Mov{};
   auto Lambda = [=]() mutable {
-    // CHECK-MESSAGES: [[@LINE-1]]:18: warning: Parameter 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
-    // CHECK-FIXES: auto Lambda = [=]() mutable {
-    // NOCHECK-FIXES: auto Lambda = [=, Mov = std::move(Mov)]() mutable {
-    // Note: No fix, because a fix requires c++14.
+    // CHECK-MESSAGES: [[@LINE-1]]:18: warning: Value 'Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
+    // CHECK-FIXES-CXX14: auto Lambda = [=, Mov = std::move(Mov)]() mutable {
     Mov.memberUse();
   };
   Lambda();
@@ -248,7 +250,7 @@ void testFieldMove(){
   valueReceiver(Owner.Mov);
   Owner.Mov = Movable{};
   valueReceiver(Owner.Mov);
-  // DISABLED-CHECK-MESSAGES: [[@LINE-1]]:17: warning: Parameter 'Owner.Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
+  // DISABLED-CHECK-MESSAGES: [[@LINE-1]]:17: warning: Value 'Owner.Mov' is copied on last use, consider moving it instead. [performance-unnecessary-copy-on-last-use]
   // DISABLED-CHECK-FIXES: valueReceiver(std::move(Owner.Mov));
 }
 */
