@@ -12,16 +12,32 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExprCXX.h"
+#include "clang/AST/LambdaCapture.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/Type.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Analysis/CFG.h"
+#include "clang/Basic/Lambda.h"
+#include "clang/Basic/LangStandard.h"
+#include "clang/Basic/SourceLocation.h"
+#include "clang/Basic/SourceManager.h"
+#include "clang/Lex/Lexer.h"
+#include "llvm/ADT/Optional.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/iterator_range.h"
+#include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <iterator>
+#include <sstream>
+#include <type_traits>
 #include <utility>
 
 using namespace clang;
@@ -112,37 +128,50 @@ static bool isLHSOfAssignment(const DeclRefExpr *DeclRef, ASTContext &Context) {
   return !IsLHSOfAssignment{DeclRef, Context}.TraverseAST(Context);
 }
 
-static bool isInLambdaCapture(const DeclRefExpr *MyDeclRef,
-                              ASTContext &Context) {
+// Todo (improvement): Expand this Visitor to also determine, if an explicit
+// CaptureInitExpr is used or if a DeclRefExpr is used implicitelly via a
+// cature default
+struct DeclRefInLambdaCaptureMatcher
+    : RecursiveASTVisitor<DeclRefInLambdaCaptureMatcher> {
+  const DeclRefExpr *Ref{};
+  // Ret:
+  struct Return {
+    LambdaExpr const *Lambda{};
+    LambdaCapture const *Capture{};
+  } Ret;
 
-  // Todo (improvement): Expand this Visitor to also determine, if an explicit
-  // CaptureInitExpr is used or if a DeclRefExpr is used implicitelly via a
-  // cature default
-  struct IsInLambdaCapture : RecursiveASTVisitor<IsInLambdaCapture> {
-    const DeclRefExpr *Ref{};
+  DeclRefInLambdaCaptureMatcher(const DeclRefExpr *Ref) : Ref(Ref) {}
 
-    IsInLambdaCapture(const DeclRefExpr *Ref) : Ref(Ref) {}
+  bool shouldWalkTypesOfTypeLocs() const { return false; }
+  bool shouldVisitTemplateInstantiations() const { return true; }
 
-    bool shouldWalkTypesOfTypeLocs() const { return false; }
-    bool shouldVisitTemplateInstantiations() const { return true; }
+  bool VisitLambdaExpr(LambdaExpr *Lambda) {
 
-    bool VisitLambdaExpr(LambdaExpr *Lambda) {
-      for (Expr *Inits : Lambda->capture_inits()) {
-        auto *S = cast<Stmt>(Inits);
-        llvm::SmallVector<Stmt *, 6> Childs;
-        while (S != nullptr) {
-          if (auto *DeclRef = dyn_cast<DeclRefExpr>(S);
-              DeclRef != nullptr && Ref == DeclRef) {
-            return false;
-          }
-          Childs.append(S->child_begin(), S->child_end());
-          S = Childs.empty() ? nullptr : Childs.pop_back_val();
+    for (auto &&[/* Expr * */ Init,
+                 /* const LambdaCapture & */ Capture] :
+         llvm::zip(Lambda->capture_inits(), Lambda->captures())) {
+      auto *S = cast<Stmt>(Init);
+      llvm::SmallVector<Stmt *, 6> Childs;
+      while (S != nullptr) {
+        if (auto *DeclRef = dyn_cast<DeclRefExpr>(S);
+            DeclRef != nullptr && Ref == DeclRef) {
+          this->Ret.Lambda = Lambda;
+          this->Ret.Capture = &Capture;
+          return false;
         }
+        Childs.append(S->child_begin(), S->child_end());
+        S = Childs.empty() ? nullptr : Childs.pop_back_val();
       }
-      return true;
     }
-  };
-  return !IsInLambdaCapture{MyDeclRef}.TraverseAST(Context);
+    return true;
+  }
+};
+
+static DeclRefInLambdaCaptureMatcher::Return
+isInLambdaCapture(const DeclRefExpr *MyDeclRef, ASTContext &Context) {
+  auto Matcher = DeclRefInLambdaCaptureMatcher{MyDeclRef};
+  Matcher.TraverseAST(Context);
+  return Matcher.Ret;
 }
 
 static Usage definiteLastUse(ASTContext *Context, CFG *const TheCFG,
@@ -291,20 +320,26 @@ void UnnecessaryCopyOnLastUseCheck::check(
 
   // Template code cant be fixed currently
   if (!FunctionOfDecl->isTemplateInstantiation()) {
+
+    if (DeclRefInLambdaCaptureMatcher::Return Ret =
+            isInLambdaCapture(Param, *Result.Context);
+        Ret.Lambda != nullptr && Ret.Capture != nullptr) {
+      this->emplaceLambdaCapture(Ret.Lambda, Ret.Capture);
+      return;
+    }
+
     clang::SourceManager &SM = *Result.SourceManager;
+
     auto Diag =
-        diag(
-            Param->getExprLoc(),
-            "Parameter '%0' is copied on last use, consider moving it instead.")
+        diag(Param->getExprLoc(),
+             "Value '%0' is copied on last use, consider moving it instead.")
         << Param->getDecl()->getNameAsString();
 
     if (auto *CExpr = Result.Nodes.getNodeAs<CXXConstructExpr>("constructExpr");
-        isInLambdaCapture(Param, *Result.Context) ||
         (CExpr && CExpr->getExprLoc().isMacroID())) {
-      // Lambda captures should not be fixed.
-      // They also require at least c++14
       return;
     }
+
     auto MVStmt = "std::move(" + Param->getDecl()->getNameAsString() + ")";
     Diag << FixItHint::CreateReplacement(Param->getSourceRange(), MVStmt)
          << Param->getDecl()->getNameAsString()
@@ -313,7 +348,7 @@ void UnnecessaryCopyOnLastUseCheck::check(
   } else { // Template code can't be fixed currently, also a std::forward may be
            // more appropriate
     auto Diag =
-        diag(Param->getExprLoc(), "Parameter '%0' may be copied on last use, "
+        diag(Param->getExprLoc(), "Value '%0' may be copied on last use, "
                                   "consider forwarding it instead.")
         << Param->getDecl()->getNameAsString();
   }
@@ -322,6 +357,7 @@ void UnnecessaryCopyOnLastUseCheck::check(
 void UnnecessaryCopyOnLastUseCheck::registerPPCallbacks(
     const SourceManager &SM, Preprocessor *PP, Preprocessor *ModuleExpanderPP) {
   Inserter.registerPreprocessor(PP);
+  this->SMP = &SM;
 }
 
 void UnnecessaryCopyOnLastUseCheck::storeOptions(
@@ -333,7 +369,11 @@ void UnnecessaryCopyOnLastUseCheck::storeOptions(
                 utils::options::serializeStringList(BlockedFunctions));
 }
 
-void UnnecessaryCopyOnLastUseCheck::onEndOfTranslationUnit() {}
+void UnnecessaryCopyOnLastUseCheck::onEndOfTranslationUnit() {
+  assert(this->getLangOpts().CPlusPlus);
+  this->generateLambdaCaptureDiagnostics(*this, Inserter, *SMP,
+                                         (!this->getLangOpts().CPlusPlus11));
+}
 
 static CFG::BuildOptions createBuildOptions() {
   CFG::BuildOptions Options;
@@ -354,4 +394,128 @@ CFG *UnnecessaryCopyOnLastUseCheck::getOrCreateCFG(const FunctionDecl *FD,
       this->CFGs.try_emplace(FD, CFG::buildCFG(nullptr, FD->getBody(), C, BO));
   return EmplaceResult.first->second.get();
 }
+
+UnnecessaryCopyOnLastUseCheck::LambdaCaptureMap::const_iterator
+endOf(UnnecessaryCopyOnLastUseCheck::LambdaCaptureMap::const_iterator Begin,
+      UnnecessaryCopyOnLastUseCheck::LambdaCaptureMap::const_iterator End) {
+  return std::upper_bound(
+      Begin, End, Begin->first,
+      [](auto const &Value, auto const &Elem) { return Value < Elem.first; });
+}
+
+struct LambdaRangeIterator {
+  using LambdaCaptureMap = UnnecessaryCopyOnLastUseCheck::LambdaCaptureMap;
+  // ===
+  using value_type = llvm::iterator_range<LambdaCaptureMap::const_iterator>;
+  using difference_type = LambdaCaptureMap::const_iterator::difference_type;
+  using reference = value_type;
+  using pointer = value_type;
+  using iterator_category = std::input_iterator_tag;
+  // ===
+  llvm::iterator_range<LambdaCaptureMap::const_iterator> Captures;
+  LambdaCaptureMap const *Map;
+
+  LambdaRangeIterator &operator++() {
+    Captures = {Captures.end(), endOf(Captures.end(), Map->end())};
+    return *this;
+  }
+
+  value_type &operator*() { return Captures; }
+
+  friend bool operator==(LambdaRangeIterator const &Lhs,
+                         LambdaRangeIterator const &Rhs) {
+    return Lhs.Captures.begin() == Rhs.Captures.begin() &&
+           Lhs.Captures.end() == Rhs.Captures.end();
+  }
+
+  friend bool operator!=(LambdaRangeIterator const &Lhs,
+                         LambdaRangeIterator const &Rhs) {
+    return !(Lhs == Rhs);
+  }
+};
+
+static_assert(std::is_swappable_v<LambdaRangeIterator>);
+
+void UnnecessaryCopyOnLastUseCheck::generateLambdaCaptureDiagnostics(
+    ClangTidyCheck &CTC, utils::IncludeInserter &II, SourceManager const &SM,
+    bool IsCXX14OrLater) {
+
+  auto GetAllLambdas = [this]() -> llvm::iterator_range<LambdaRangeIterator> {
+    return {
+        LambdaRangeIterator{
+            {this->CaptureList.begin(),
+             endOf(this->CaptureList.begin(), this->CaptureList.end())},
+            &this->CaptureList},
+        LambdaRangeIterator{{this->CaptureList.end(), this->CaptureList.end()},
+                            &this->CaptureList}};
+  };
+
+  for (auto &&LambdaCaptures : GetAllLambdas()) {
+    LambdaExpr const *LExpr = LambdaCaptures.begin()->first;
+    LambdaCaptureDefault Default = LExpr->getCaptureDefault();
+
+    auto CapAndInits = llvm::zip(LExpr->captures(), LExpr->capture_inits());
+
+    auto UntouchedCaptures =
+        llvm::make_filter_range(CapAndInits, [&](const auto &I) {
+          LambdaCapture const &Capture = std::get<0>(I);
+          return Capture.isExplicit() &&
+                 LambdaCaptures.end() !=
+                     llvm::find_if(LambdaCaptures,
+                                   [&](LambdaCaptureMapEntry const &Pair) {
+                                     return &Capture == Pair.second;
+                                   });
+        });
+
+    llvm::SmallVector<std::string, 4> CapturesAsStrings;
+    if (Default != LCD_None) {
+      CapturesAsStrings.emplace_back(Default == LCD_ByCopy ? "=" : "&");
+    }
+
+    for (auto &&I : UntouchedCaptures) {
+      LambdaCapture const &Capture = std::get<0>(I);
+      Expr const *Init = std::get<1>(I);
+      CharSourceRange::getCharRange({Capture.getLocation(), Init->getEndLoc()});
+      Lexer::getSourceText(CharSourceRange::getTokenRange(
+                               {Capture.getLocation(), Init->getEndLoc()}),
+                           SM, this->getLangOpts());
+    }
+
+    llvm::SmallVector<std::string, 4> CaptureParameterNames;
+    for (auto &&CapturePair : LambdaCaptures) {
+      auto Name = CapturePair.second->getCapturedVar()->getName();
+      std::string CaptureString =
+          llvm::formatv("{0} = std::move({0})", Name).str();
+      CapturesAsStrings.emplace_back(CaptureString);
+    }
+
+    auto Diag =
+        CTC.diag(LExpr->getIntroducerRange().getBegin(),
+                 "Lambda captures '%0' are copied on last use, consider "
+                 "moving them instead.")
+        << llvm::join(CaptureParameterNames, ", ");
+
+    if (IsCXX14OrLater) {
+      return; // CXX11 does not support init captures
+    }
+
+    std::stringstream SStream{""};
+    SStream << "[" << llvm::join(CapturesAsStrings, ", ") << "]";
+    Diag << FixItHint::CreateReplacement(LExpr->getIntroducerRange(),
+                                         SStream.str())
+         << II.createIncludeInsertion(
+                SM.getFileID(LExpr->getIntroducerRange().getBegin()),
+                "<utility>");
+  }
+}
+
+void UnnecessaryCopyOnLastUseCheck::emplaceLambdaCapture(
+    LambdaExpr const *Lambda, LambdaCapture const *Capture) {
+  // this->CaptureList must be sorted
+  auto InsertPos = llvm::upper_bound(this->CaptureList,
+                                     LambdaCaptureMapEntry{Lambda, Capture});
+  this->CaptureList.emplace(InsertPos, Lambda, Capture);
+  assert(llvm::is_sorted(this->CaptureList));
+}
+
 } // namespace clang::tidy::performance
