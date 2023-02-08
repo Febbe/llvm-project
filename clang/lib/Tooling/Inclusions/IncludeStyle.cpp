@@ -7,17 +7,20 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Tooling/Inclusions/IncludeStyle.h"
+#include <limits>
 
 using clang::tooling::IncludeStyle;
 
 namespace llvm {
 namespace yaml {
 
+constexpr int DefaultPriority = std::numeric_limits<int>::max();
+
 void MappingTraits<IncludeStyle::IncludeCategory>::mapping(
     IO &IO, IncludeStyle::IncludeCategory &Category) {
   IO.mapOptional("Regex", Category.Regex);
-  IO.mapOptional("Priority", Category.Priority);
-  IO.mapOptional("SortPriority", Category.SortPriority);
+  IO.mapOptional("Priority", Category.Priority, DefaultPriority);
+  IO.mapOptional("SortPriority", Category.SortPriority, Category.Priority);
   IO.mapOptional("CaseSensitive", Category.RegexIsCaseSensitive);
 }
 

@@ -12,6 +12,7 @@
 #include "clang/Lex/Lexer.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
+#include <limits>
 #include <optional>
 
 namespace clang {
@@ -206,33 +207,33 @@ IncludeCategoryManager::IncludeCategoryManager(const IncludeStyle &Style,
   }
 }
 
+constexpr int DefaultMainIncludePriority = 0;
+constexpr int DefaultMainIncludeSortPriority = 0;
+
 int IncludeCategoryManager::getIncludePriority(StringRef IncludeName,
                                                bool CheckMainHeader) const {
-  int Ret = INT_MAX;
+  if (CheckMainHeader && IsMainFile && isMainHeader(IncludeName))
+    return DefaultMainIncludePriority;
+
   for (unsigned i = 0, e = CategoryRegexs.size(); i != e; ++i)
-    if (CategoryRegexs[i].match(IncludeName)) {
-      Ret = Style.IncludeCategories[i].Priority;
-      break;
-    }
-  if (CheckMainHeader && IsMainFile && Ret > 0 && isMainHeader(IncludeName))
-    Ret = 0;
-  return Ret;
+    if (CategoryRegexs[i].match(IncludeName))
+      return Style.IncludeCategories[i].Priority;
+
+  return std::numeric_limits<int>::max();
 }
 
 int IncludeCategoryManager::getSortIncludePriority(StringRef IncludeName,
                                                    bool CheckMainHeader) const {
-  int Ret = INT_MAX;
+  if (CheckMainHeader && IsMainFile && isMainHeader(IncludeName))
+    return DefaultMainIncludeSortPriority;
+
   for (unsigned i = 0, e = CategoryRegexs.size(); i != e; ++i)
-    if (CategoryRegexs[i].match(IncludeName)) {
-      Ret = Style.IncludeCategories[i].SortPriority;
-      if (Ret == 0)
-        Ret = Style.IncludeCategories[i].Priority;
-      break;
-    }
-  if (CheckMainHeader && IsMainFile && Ret > 0 && isMainHeader(IncludeName))
-    Ret = 0;
-  return Ret;
+    if (CategoryRegexs[i].match(IncludeName))
+      return Style.IncludeCategories[i].SortPriority;
+
+  return std::numeric_limits<int>::max();
 }
+
 bool IncludeCategoryManager::isMainHeader(StringRef IncludeName) const {
   if (!IncludeName.startswith("\""))
     return false;

@@ -2875,15 +2875,17 @@ static void sortCppIncludes(const FormatStyle &Style,
     llvm::stable_sort(Indices, [&](unsigned LHSI, unsigned RHSI) {
       const auto LHSFilenameLower = Includes[LHSI].Filename.lower();
       const auto RHSFilenameLower = Includes[RHSI].Filename.lower();
-      return std::tie(Includes[LHSI].Priority, LHSFilenameLower,
-                      Includes[LHSI].Filename) <
-             std::tie(Includes[RHSI].Priority, RHSFilenameLower,
-                      Includes[RHSI].Filename);
+      return std::tie(Includes[LHSI].Category, Includes[LHSI].Priority,
+                      LHSFilenameLower, Includes[LHSI].Filename) <
+             std::tie(Includes[RHSI].Category, Includes[RHSI].Priority,
+                      RHSFilenameLower, Includes[RHSI].Filename);
     });
   } else {
     llvm::stable_sort(Indices, [&](unsigned LHSI, unsigned RHSI) {
-      return std::tie(Includes[LHSI].Priority, Includes[LHSI].Filename) <
-             std::tie(Includes[RHSI].Priority, Includes[RHSI].Filename);
+      return std::tie(Includes[LHSI].Category, Includes[LHSI].Priority,
+                      Includes[LHSI].Filename) <
+             std::tie(Includes[RHSI].Category, Includes[RHSI].Priority,
+                      Includes[RHSI].Filename);
     });
   }
 
@@ -2966,16 +2968,12 @@ tooling::Replacements sortCppIncludes(const FormatStyle &Style, StringRef Code,
   SmallVector<StringRef, 4> Matches;
   SmallVector<IncludeDirective, 16> IncludesInBlock;
 
-  // In compiled files, consider the first #include to be the main #include of
-  // the file if it is not a system #include. This ensures that the header
-  // doesn't have hidden dependencies
-  // (http://llvm.org/docs/CodingStandards.html#include-style).
-  //
   // FIXME: Do some validation, e.g. edit distance of the base name, to fix
   // cases where the first #include is unlikely to be the main header.
   tooling::IncludeCategoryManager Categories(Style.IncludeStyle, FileName);
   bool FirstIncludeBlock = true;
-  bool MainIncludeFound = false;
+  // Todo(remove before merge): removed: multiple files can be main includes
+  // This option caused random sorting, depending which was detected first.
   bool FormattingOff = false;
 
   // '[' must be the first and '-' the last character inside [...].
@@ -3029,11 +3027,11 @@ tooling::Replacements sortCppIncludes(const FormatStyle &Style, StringRef Code,
         }
         int Category = Categories.getIncludePriority(
             IncludeName,
-            /*CheckMainHeader=*/!MainIncludeFound && FirstIncludeBlock);
-        int Priority = Categories.getSortIncludePriority(
-            IncludeName, !MainIncludeFound && FirstIncludeBlock);
-        if (Category == 0)
-          MainIncludeFound = true;
+            /*CheckMainHeader=*/FirstIncludeBlock);
+        int Priority =
+            Categories.getSortIncludePriority(IncludeName, FirstIncludeBlock);
+        // Todo(remove before merge): reason for removal: every header can have
+        // 0,0 priority
         IncludesInBlock.push_back(
             {IncludeName, Line, Prev, Category, Priority});
       } else if (!IncludesInBlock.empty() && !EmptyLineSkipped) {

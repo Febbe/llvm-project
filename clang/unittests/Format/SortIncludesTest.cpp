@@ -535,11 +535,18 @@ TEST_F(SortIncludesTest, LeavesMainHeaderFirst) {
                  "#include \"b.h\"\n",
                  "a.cc"));
 
-  // Only recognize the first #include with a matching basename as main include.
+  // Todo (remove-before-merge): I consider the assumption, that there is only
+  // one main include as wrong.
+  // E.g. a.cpp -> a.priv.h && a.h
+  // E.g. a_test.cpp -> a_test.h && a.h
+  // Maybe add a "//clang-format pragma: not_main" to remove false positives
+
+  // Recognize all possible main #include's with a matching basename as main
+  // include.
   EXPECT_EQ("#include \"a.h\"\n"
+            "#include \"llvm/a.h\"\n"
             "#include \"b.h\"\n"
-            "#include \"c.h\"\n"
-            "#include \"llvm/a.h\"\n",
+            "#include \"c.h\"\n",
             sort("#include \"b.h\"\n"
                  "#include \"a.h\"\n"
                  "#include \"c.h\"\n"
