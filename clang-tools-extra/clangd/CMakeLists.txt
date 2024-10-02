@@ -60,6 +60,7 @@ endif()
 
 include_directories(BEFORE "${CMAKE_CURRENT_BINARY_DIR}/../clang-tidy")
 include_directories(BEFORE "${CMAKE_CURRENT_SOURCE_DIR}/../include-cleaner/include")
+include_directories(BEFORE "${CMAKE_CURRENT_SOURCE_DIR}/../clang-query")
 
 add_clang_library(clangDaemon
   AST.cpp

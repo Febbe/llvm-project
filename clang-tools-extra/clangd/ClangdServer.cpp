@@ -62,8 +62,8 @@ namespace clangd {
 namespace {
 
 // Tracks number of times a tweak has been offered.
-static constexpr trace::Metric TweakAvailable(
-    "tweak_available", trace::Metric::Counter, "tweak_id");
+static constexpr trace::Metric
+    TweakAvailable("tweak_available", trace::Metric::Counter, "tweak_id");
 
 // Update the FileIndex with new ASTs and plumb the diagnostics responses.
 struct UpdateIndexCallbacks : public ParsingCallbacks {
@@ -792,6 +792,18 @@ void ClangdServer::locateSymbolAt(PathRef File, Position Pos,
   };
 
   WorkScheduler->runWithAST("Definitions", File, std::move(Action));
+}
+
+void ClangdServer::findAST(SearchASTArgs const &Args,
+                           Callback<std::vector<ast_matchers::BoundNodes>> CB) {
+  auto Action =
+      [Args, CB = std::move(CB)](llvm::Expected<InputsAndAST> InpAST) mutable {
+        if (!InpAST)
+          return CB(InpAST.takeError());
+        CB(clangd::locateASTQuery(InpAST->AST, Args));
+      };
+
+  WorkScheduler->runWithAST("Definitions", Args.textDocument.uri.file(), std::move(Action));
 }
 
 void ClangdServer::switchSourceHeader(

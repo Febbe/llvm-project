@@ -30,6 +30,8 @@
 #include "support/MemoryTree.h"
 #include "support/Path.h"
 #include "support/ThreadsafeFS.h"
+#include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Tooling/Core/Replacement.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/FunctionExtras.h"
@@ -255,6 +257,9 @@ public:
   void locateSymbolAt(PathRef File, Position Pos,
                       Callback<std::vector<LocatedSymbol>> CB);
 
+  void findAST(const SearchASTArgs &Args,
+               Callback<std::vector<ast_matchers::BoundNodes>> CB);
+
   /// Switch to a corresponding source file when given a header file, and vice
   /// versa.
   void switchSourceHeader(PathRef Path,
@@ -340,8 +345,8 @@ public:
   /// Rename all occurrences of the symbol at the \p Pos in \p File to
   /// \p NewName.
   /// If WantFormat is false, the final TextEdit will be not formatted,
-  /// embedders could use this method to get all occurrences of the symbol (e.g.
-  /// highlighting them in prepare stage).
+  /// embedders could use this method to get all occurrences of the symbol
+  /// (e.g. highlighting them in prepare stage).
   void rename(PathRef File, Position Pos, llvm::StringRef NewName,
               const RenameOptions &Opts, Callback<RenameResult> CB);
 
@@ -422,19 +427,20 @@ public:
   void getAST(PathRef File, std::optional<Range> R,
               Callback<std::optional<ASTNode>> CB);
 
-  /// Runs an arbitrary action that has access to the AST of the specified file.
-  /// The action will execute on one of ClangdServer's internal threads.
+  /// Runs an arbitrary action that has access to the AST of the specified
+  /// file. The action will execute on one of ClangdServer's internal threads.
   /// The AST is only valid for the duration of the callback.
   /// As with other actions, the file must have been opened.
   void customAction(PathRef File, llvm::StringRef Name,
                     Callback<InputsAndAST> Action);
 
-  /// Fetches diagnostics for current version of the \p File. This might fail if
-  /// server is busy (building a preamble) and would require a long time to
+  /// Fetches diagnostics for current version of the \p File. This might fail
+  /// if server is busy (building a preamble) and would require a long time to
   /// prepare diagnostics. If it fails, clients should wait for
   /// onSemanticsMaybeChanged and then retry.
-  /// These 'pulled' diagnostics do not interfere with the diagnostics 'pushed'
-  /// to Callbacks::onDiagnosticsReady, and clients may use either or both.
+  /// These 'pulled' diagnostics do not interfere with the diagnostics
+  /// 'pushed' to Callbacks::onDiagnosticsReady, and clients may use either or
+  /// both.
   void diagnostics(PathRef File, Callback<std::vector<Diag>> CB);
 
   /// Returns estimated memory usage and other statistics for each of the
@@ -446,8 +452,8 @@ public:
   /// FIXME: those metrics might be useful too, we should add them.
   llvm::StringMap<TUScheduler::FileStats> fileStats() const;
 
-  /// Gets the contents of a currently tracked file. Returns nullptr if the file
-  /// isn't being tracked.
+  /// Gets the contents of a currently tracked file. Returns nullptr if the
+  /// file isn't being tracked.
   std::shared_ptr<const std::string> getDraft(PathRef File) const;
 
   // Blocks the main thread until the server is idle. Only for use in tests.

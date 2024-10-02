@@ -15,6 +15,8 @@
 #include "ParsedAST.h"
 #include "Protocol.h"
 #include "Quality.h"
+#include "Query.h"
+#include "QuerySession.h"
 #include "Selection.h"
 #include "SourceCode.h"
 #include "URI.h"
@@ -42,6 +44,10 @@
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/Type.h"
+#include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/ASTMatchers/ASTMatchers.h"
+#include "clang/ASTMatchers/Dynamic/Diagnostics.h"
+#include "clang/ASTMatchers/Dynamic/Parser.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
@@ -53,6 +59,7 @@
 #include "clang/Index/IndexingOptions.h"
 #include "clang/Index/USRGeneration.h"
 #include "clang/Lex/Lexer.h"
+#include "clang/Parse/Parser.h"
 #include "clang/Tooling/Syntax/Tokens.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -65,6 +72,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cmath>
 #include <optional>
 #include <string>
 #include <vector>
@@ -755,6 +763,61 @@ const syntax::Token *findNearbyIdentifier(const SpelledWord &Word,
         BestTok->location().printToString(SM));
 
   return BestTok;
+}
+
+auto locateASTQuery(ParsedAST &AST, SearchASTArgs const &Query)
+    -> std::vector<ast_matchers::BoundNodes> {
+  using namespace ast_matchers;
+  using namespace ast_matchers::dynamic;
+  using ast_matchers::dynamic::Parser;
+
+  Diagnostics Diag;
+  auto MatcherSource = llvm::StringRef(Query.searchQuery).ltrim();
+  auto OrigMatcherSource = MatcherSource;
+
+  std::optional<DynTypedMatcher> Matcher = Parser::parseMatcherExpression(
+      MatcherSource,
+      nullptr /* is this sema instance usefull, to reduce overhead?*/,
+      nullptr /*we currently don't support let*/, &Diag);
+  if (!Matcher) {
+    log("Not a valid top-level matcher.\n");
+    return {/* TODO */};
+  }
+  auto ActualSource = OrigMatcherSource.slice(0, OrigMatcherSource.size() -
+                                                     MatcherSource.size());
+  auto *Q = new query::MatchQuery(ActualSource, *Matcher);
+  Q->RemainingContent = MatcherSource;
+
+  // Q->run(AST);:
+  //==
+
+  struct CollectBoundNodes : MatchFinder::MatchCallback {
+    std::vector<BoundNodes> &Bindings;
+    CollectBoundNodes(std::vector<BoundNodes> &Bindings) : Bindings(Bindings) {}
+    void run(const MatchFinder::MatchResult &Result) override {
+      Bindings.push_back(Result.Nodes);
+    }
+  };
+
+  MatchFinder Finder;
+  std::vector<BoundNodes> Matches;
+  DynTypedMatcher MaybeBoundMatcher = *Matcher;
+  if (Query.BindRoot) {
+    std::optional<DynTypedMatcher> M = Matcher->tryBind("root");
+    if (M)
+      MaybeBoundMatcher = *M;
+  }
+  CollectBoundNodes Collect(Matches);
+  if (!Finder.addDynamicMatcher(MaybeBoundMatcher, &Collect)) {
+    log("Not a valid top-level matcher.\n");
+    return {/* TODO */};
+  }
+
+  ASTContext &Ctx = AST.getASTContext();
+  Ctx.getParentMapContext().setTraversalKind(Query.Tk);
+  Finder.matchAST(Ctx);
+
+  return Matches;
 }
 
 std::vector<LocatedSymbol> locateSymbolAt(ParsedAST &AST, Position Pos,
@@ -2013,15 +2076,15 @@ static QualType typeForNode(const SelectionTree::Node *N) {
   return QualType();
 }
 
-// Given a type targeted by the cursor, return one or more types that are more interesting
-// to target.
-static void unwrapFindType(
-    QualType T, const HeuristicResolver* H, llvm::SmallVector<QualType>& Out) {
+// Given a type targeted by the cursor, return one or more types that are more
+// interesting to target.
+static void unwrapFindType(QualType T, const HeuristicResolver *H,
+                           llvm::SmallVector<QualType> &Out) {
   if (T.isNull())
     return;
 
   // If there's a specific type alias, point at that rather than unwrapping.
-  if (const auto* TDT = T->getAs<TypedefType>())
+  if (const auto *TDT = T->getAs<TypedefType>())
     return Out.push_back(QualType(TDT, 0));
 
   // Pointers etc => pointee type.
@@ -2045,17 +2108,18 @@ static void unwrapFindType(
 
   // For smart pointer types, add the underlying type
   if (H)
-    if (const auto* PointeeType = H->getPointeeType(T.getNonReferenceType().getTypePtr())) {
-        unwrapFindType(QualType(PointeeType, 0), H, Out);
-        return Out.push_back(T);
+    if (const auto *PointeeType =
+            H->getPointeeType(T.getNonReferenceType().getTypePtr())) {
+      unwrapFindType(QualType(PointeeType, 0), H, Out);
+      return Out.push_back(T);
     }
 
   return Out.push_back(T);
 }
 
 // Convenience overload, to allow calling this without the out-parameter
-static llvm::SmallVector<QualType> unwrapFindType(
-    QualType T, const HeuristicResolver* H) {
+static llvm::SmallVector<QualType> unwrapFindType(QualType T,
+                                                  const HeuristicResolver *H) {
   llvm::SmallVector<QualType> Result;
   unwrapFindType(T, H, Result);
   return Result;
@@ -2077,10 +2141,11 @@ std::vector<LocatedSymbol> findType(ParsedAST &AST, Position Pos,
     std::vector<LocatedSymbol> LocatedSymbols;
 
     // NOTE: unwrapFindType might return duplicates for something like
-    // unique_ptr<unique_ptr<T>>. Let's *not* remove them, because it gives you some
-    // information about the type you may have not known before
-    // (since unique_ptr<unique_ptr<T>> != unique_ptr<T>).
-    for (const QualType& Type : unwrapFindType(typeForNode(N), AST.getHeuristicResolver()))
+    // unique_ptr<unique_ptr<T>>. Let's *not* remove them, because it gives you
+    // some information about the type you may have not known before (since
+    // unique_ptr<unique_ptr<T>> != unique_ptr<T>).
+    for (const QualType &Type :
+         unwrapFindType(typeForNode(N), AST.getHeuristicResolver()))
       llvm::copy(locateSymbolForType(AST, Type, Index),
                  std::back_inserter(LocatedSymbols));
 
